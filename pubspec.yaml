@@ -49,6 +49,10 @@ dependencies:
   
   # Local storage
   shared_preferences: ^2.2.2
+  
+  # Protocol Buffers for Steam API
+  protobuf: ^3.1.0
+  fixnum: ^1.0.1
 
 dev_dependencies:
   flutter_test:

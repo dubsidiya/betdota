@@ -25,6 +25,13 @@ class _MatchDetailScreenState extends State<MatchDetailScreen> {
   }
 
   @override
+  void dispose() {
+    // Очищаем выбранный матч при закрытии экрана
+    context.read<MatchesProvider>().clearSelectedMatch();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -40,18 +47,41 @@ class _MatchDetailScreenState extends State<MatchDetailScreen> {
 
           if (provider.error != null && provider.selectedMatch == null) {
             return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline, size: 64, color: Colors.red),
-                  const SizedBox(height: 16),
-                  Text(provider.error!),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: () => provider.loadMatchDetails(widget.matchId),
-                    child: const Text('Попробовать снова'),
-                  ),
-                ],
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Ошибка загрузки',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      provider.error!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () => provider.loadMatchDetails(widget.matchId),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Попробовать снова'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.deepPurple,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           }
@@ -73,7 +103,7 @@ class _MatchDetailScreenState extends State<MatchDetailScreen> {
                 if (match.players != null && match.players!.isNotEmpty)
                   _buildPlayersList(match.players!),
                 const SizedBox(height: 24),
-                _buildPredictionButton(context, match),
+                if (!match.isFinished) _buildPredictionButton(context, match),
               ],
             ),
           );
