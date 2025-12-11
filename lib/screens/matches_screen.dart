@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../models/match.dart';
 import '../providers/matches_provider.dart';
 import 'match_detail_screen.dart';
+import 'live_betting_screen.dart';
 
 class MatchesScreen extends StatefulWidget {
   const MatchesScreen({super.key});
@@ -389,7 +390,7 @@ class _MatchCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 child: Row(
                   children: [
-                    if (match.isLive)
+                    if (match.isLive) ...[
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
@@ -418,7 +419,26 @@ class _MatchCard extends StatelessWidget {
                             ),
                           ],
                         ),
-                      )
+                      ),
+                      const Spacer(),
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => LiveBettingScreen(match: match),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.trending_up, size: 16),
+                        label: const Text('Ставки'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                      ),
+                    ]
                     else if (match.isUpcoming)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

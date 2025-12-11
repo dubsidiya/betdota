@@ -1,253 +1,244 @@
 import 'package:flutter/foundation.dart';
-import '../models/match.dart';
 import '../models/live_match_data.dart';
 import '../models/odds.dart';
+import '../models/match.dart';
 import '../models/betting_decision.dart';
 
-/// Сервис для принятия решений о ставках на основе анализа матча в реальном времени
+/// Сервис для принятия решений о ставках на основе анализа ситуации на карте
 class BettingDecisionService {
   
-  /// Анализировать текущее состояние матча и принять решение о ставке
-  BettingDecision analyzeAndDecide(
-    LiveMatchData liveData,
-    Odds? odds,
-    Match match, {
-    double baseAmount = 100.0, // Базовая сумма ставки
+  /// Анализ текущей ситуации и принятие решения о ставке
+  BettingDecision analyzeAndDecide({
+    required LiveMatchData liveData,
+    required Odds odds,
+    required Match match,
   }) {
+    // Анализируем различные факторы
+    final analysis = _analyzeGameState(liveData);
+    
+    // Определяем рекомендуемую ставку
+    final recommendation = _calculateBettingRecommendation(
+      analysis: analysis,
+      odds: odds,
+      liveData: liveData,
+    );
+    
+    return recommendation;
+  }
+  
+  /// Анализ текущего состояния игры
+  Map<String, dynamic> _analyzeGameState(LiveMatchData liveData) {
     final analysis = <String, dynamic>{};
-    double radiantAdvantage = 0.0;
-    double direAdvantage = 0.0;
-    final reasons = <String>[];
     
-    // Фактор 1: Разница в золоте (Net Worth)
-    if (liveData.radiantNetWorth != null && liveData.direNetWorth != null) {
-      final netWorthDiff = liveData.radiantNetWorth! - liveData.direNetWorth!;
-      final netWorthPercent = netWorthDiff.abs() / ((liveData.radiantNetWorth! + liveData.direNetWorth!) / 2);
-      
-      analysis['netWorthDiff'] = netWorthDiff;
-      analysis['netWorthPercent'] = netWorthPercent;
-      
-      if (netWorthDiff > 5000) {
-        radiantAdvantage += 0.15;
-        reasons.add('Radiant имеет преимущество в золоте: ${netWorthDiff.toStringAsFixed(0)}');
-      } else if (netWorthDiff < -5000) {
-        direAdvantage += 0.15;
-        reasons.add('Dire имеет преимущество в золоте: ${netWorthDiff.abs().toStringAsFixed(0)}');
-      }
+    // 1. Анализ золота (Net Worth)
+    final radiantNW = liveData.radiantNetWorth ?? 0;
+    final direNW = liveData.direNetWorth ?? 0;
+    final totalNW = radiantNW + direNW;
+    
+    if (totalNW > 0) {
+      analysis['radiantGoldAdvantage'] = (radiantNW - direNW) / totalNW;
+      analysis['radiantGoldPercent'] = radiantNW / totalNW;
+    } else {
+      analysis['radiantGoldAdvantage'] = 0.0;
+      analysis['radiantGoldPercent'] = 0.5;
     }
     
-    // Фактор 2: Разница в убийствах
-    if (liveData.radiantKills != null && liveData.direKills != null) {
-      final killDiff = liveData.radiantKills! - liveData.direKills!;
-      analysis['killDiff'] = killDiff;
-      
-      if (killDiff > 5) {
-        radiantAdvantage += 0.12;
-        reasons.add('Radiant лидирует по убийствам: +$killDiff');
-      } else if (killDiff < -5) {
-        direAdvantage += 0.12;
-        reasons.add('Dire лидирует по убийствам: +${killDiff.abs()}');
-      }
+    // 2. Анализ убийств
+    final radiantKills = liveData.radiantKills ?? 0;
+    final direKills = liveData.direKills ?? 0;
+    final totalKills = radiantKills + direKills;
+    
+    if (totalKills > 0) {
+      analysis['radiantKillAdvantage'] = (radiantKills - direKills) / totalKills;
+      analysis['radiantKillPercent'] = radiantKills / totalKills;
+    } else {
+      analysis['radiantKillAdvantage'] = 0.0;
+      analysis['radiantKillPercent'] = 0.5;
     }
     
-    // Фактор 3: Разница в счете (уничтоженные строения)
-    if (liveData.radiantScore != null && liveData.direScore != null) {
-      final scoreDiff = liveData.radiantScore! - liveData.direScore!;
-      analysis['scoreDiff'] = scoreDiff;
-      
-      if (scoreDiff > 3) {
-        radiantAdvantage += 0.10;
-        reasons.add('Radiant уничтожил больше строений: +$scoreDiff');
-      } else if (scoreDiff < -3) {
-        direAdvantage += 0.10;
-        reasons.add('Dire уничтожил больше строений: +${scoreDiff.abs()}');
-      }
-    }
+    // 3. Анализ времени матча
+    final duration = liveData.duration ?? 0;
+    analysis['duration'] = duration;
+    analysis['isEarlyGame'] = duration < 1200; // До 20 минут
+    analysis['isMidGame'] = duration >= 1200 && duration < 2400; // 20-40 минут
+    analysis['isLateGame'] = duration >= 2400; // После 40 минут
     
-    // Фактор 4: Время матча (ранняя/поздняя игра)
-    if (liveData.duration != null) {
-      analysis['duration'] = liveData.duration;
-      
-      // В ранней игре (0-20 мин) преимущество менее значимо
-      // В поздней игре (30+ мин) преимущество более критично
-      if (liveData.duration! < 1200) { // До 20 минут
-        radiantAdvantage *= 0.7;
-        direAdvantage *= 0.7;
-        reasons.add('Ранняя игра - преимущество может измениться');
-      } else if (liveData.duration! > 1800) { // После 30 минут
-        radiantAdvantage *= 1.2;
-        direAdvantage *= 1.2;
-        reasons.add('Поздняя игра - преимущество критично');
-      }
-    }
-    
-    // Фактор 5: Анализ игроков (если доступны)
+    // 4. Анализ игроков
     if (liveData.players != null && liveData.players!.isNotEmpty) {
       final radiantPlayers = liveData.players!.where((p) => p.teamNumber == 0).toList();
       final direPlayers = liveData.players!.where((p) => p.teamNumber == 1).toList();
       
-      // Средний уровень команды
-      final radiantAvgLevel = radiantPlayers
-          .where((p) => p.level != null)
-          .map((p) => p.level!)
-          .fold(0, (a, b) => a + b) / radiantPlayers.length;
-      final direAvgLevel = direPlayers
-          .where((p) => p.level != null)
-          .map((p) => p.level!)
-          .fold(0, (a, b) => a + b) / direPlayers.length;
-      
-      if (radiantAvgLevel > direAvgLevel + 2) {
-        radiantAdvantage += 0.08;
-        reasons.add('Radiant имеет преимущество в уровнях');
-      } else if (direAvgLevel > radiantAvgLevel + 2) {
-        direAdvantage += 0.08;
-        reasons.add('Dire имеет преимущество в уровнях');
-      }
+      // Средний уровень команд
+      final radiantAvgLevel = radiantPlayers.isNotEmpty
+          ? radiantPlayers.map((p) => p.level ?? 0).reduce((a, b) => a + b) / radiantPlayers.length
+          : 0.0;
+      final direAvgLevel = direPlayers.isNotEmpty
+          ? direPlayers.map((p) => p.level ?? 0).reduce((a, b) => a + b) / direPlayers.length
+          : 0.0;
       
       analysis['radiantAvgLevel'] = radiantAvgLevel;
       analysis['direAvgLevel'] = direAvgLevel;
+      analysis['levelAdvantage'] = radiantAvgLevel - direAvgLevel;
+      
+      // Средний GPM команд
+      final radiantAvgGPM = radiantPlayers.isNotEmpty
+          ? radiantPlayers.map((p) => p.gpm ?? 0).reduce((a, b) => a + b) / radiantPlayers.length
+          : 0.0;
+      final direAvgGPM = direPlayers.isNotEmpty
+          ? direPlayers.map((p) => p.gpm ?? 0).reduce((a, b) => a + b) / direPlayers.length
+          : 0.0;
+      
+      analysis['radiantAvgGPM'] = radiantAvgGPM;
+      analysis['direAvgGPM'] = direAvgGPM;
+      analysis['gpmAdvantage'] = radiantAvgGPM - direAvgGPM;
     }
     
-    // Фактор 6: Коэффициенты букмекеров
-    if (odds != null) {
-      analysis['odds'] = {
-        'radiant': odds.radiantOdds,
-        'dire': odds.direOdds,
-      };
-      
-      // Если коэффициенты сильно отличаются от текущего состояния, это может быть value bet
-      final expectedRadiantWin = 1.0 / odds.radiantOdds;
-      final expectedDireWin = 1.0 / odds.direOdds;
-      
-      if (radiantAdvantage > direAdvantage && expectedRadiantWin < 0.5) {
-        radiantAdvantage += 0.05;
-        reasons.add('Value bet на Radiant (коэффициент выгодный)');
-      } else if (direAdvantage > radiantAdvantage && expectedDireWin < 0.5) {
-        direAdvantage += 0.05;
-        reasons.add('Value bet на Dire (коэффициент выгодный)');
-      }
-    }
+    // 5. Общий счет (если доступен)
+    final radiantScore = liveData.radiantScore ?? 0;
+    final direScore = liveData.direScore ?? 0;
+    analysis['radiantScore'] = radiantScore;
+    analysis['direScore'] = direScore;
+    analysis['scoreAdvantage'] = radiantScore - direScore;
     
-    // Определяем победителя и уверенность
-    String recommendedTeam;
-    double confidence;
+    return analysis;
+  }
+  
+  /// Расчет рекомендации по ставке
+  BettingDecision _calculateBettingRecommendation({
+    required Map<String, dynamic> analysis,
+    required Odds odds,
+    required LiveMatchData liveData,
+  }) {
+    double radiantWinProbability = 0.5;
+    double confidence = 0.0;
+    String reasoning = '';
+    double recommendedBetAmount = 0.0;
     
-    if (radiantAdvantage > direAdvantage) {
-      recommendedTeam = 'radiant';
-      confidence = (0.5 + radiantAdvantage).clamp(0.0, 1.0);
-    } else if (direAdvantage > radiantAdvantage) {
-      recommendedTeam = 'dire';
-      confidence = (0.5 + direAdvantage).clamp(0.0, 1.0);
+    // Базовую вероятность берем из коэффициентов
+    final impliedRadiantProb = 1.0 / (odds.radiantOdds ?? 2.0);
+    final impliedDireProb = 1.0 / (odds.direOdds ?? 2.0);
+    final totalImplied = impliedRadiantProb + impliedDireProb;
+    
+    // Нормализуем (коэффициенты могут быть не идеальными)
+    radiantWinProbability = impliedRadiantProb / totalImplied;
+    
+    // Корректируем на основе анализа игры
+    final goldAdvantage = analysis['radiantGoldAdvantage'] as double;
+    final killAdvantage = analysis['radiantKillAdvantage'] as double;
+    final levelAdvantage = analysis['levelAdvantage'] as double ?? 0.0;
+    final gpmAdvantage = analysis['gpmAdvantage'] as double ?? 0.0;
+    final scoreAdvantage = analysis['scoreAdvantage'] as int ?? 0;
+    
+    // Веса факторов в зависимости от времени игры
+    final duration = analysis['duration'] as int;
+    double goldWeight, killWeight, levelWeight, gpmWeight;
+    
+    if (duration < 1200) {
+      // Ранняя игра: уровень и GPM важнее
+      goldWeight = 0.2;
+      killWeight = 0.3;
+      levelWeight = 0.3;
+      gpmWeight = 0.2;
+    } else if (duration < 2400) {
+      // Средняя игра: все факторы важны
+      goldWeight = 0.3;
+      killWeight = 0.25;
+      levelWeight = 0.2;
+      gpmWeight = 0.25;
     } else {
-      // Ничья - не рекомендуем ставку
-      recommendedTeam = 'none';
-      confidence = 0.5;
+      // Поздняя игра: золото критично
+      goldWeight = 0.4;
+      killWeight = 0.2;
+      levelWeight = 0.15;
+      gpmWeight = 0.25;
     }
     
-    // Рассчитываем рекомендуемую сумму ставки на основе уверенности
-    double recommendedAmount = 0.0;
-    if (confidence >= 0.6) {
-      // Чем выше уверенность, тем больше сумма (но с ограничением)
-      recommendedAmount = baseAmount * (confidence - 0.5) * 2;
-      recommendedAmount = recommendedAmount.clamp(baseAmount * 0.1, baseAmount * 2.0);
+    // Корректируем вероятность
+    final adjustment = (goldAdvantage * goldWeight) +
+                      (killAdvantage * killWeight) +
+                      (levelAdvantage / 25.0 * levelWeight) + // Нормализуем уровень
+                      (gpmAdvantage / 1000.0 * gpmWeight); // Нормализуем GPM
+    
+    radiantWinProbability = (radiantWinProbability + adjustment).clamp(0.0, 1.0);
+    
+    // Уверенность зависит от размера преимущества
+    final advantageSize = (goldAdvantage.abs() + killAdvantage.abs() + 
+                          (levelAdvantage.abs() / 25.0) + 
+                          (gpmAdvantage.abs() / 1000.0)) / 4.0;
+    confidence = advantageSize.clamp(0.0, 1.0);
+    
+    // Генерируем обоснование
+    final reasons = <String>[];
+    
+    if (goldAdvantage > 0.1) {
+      reasons.add('Radiant имеет значительное преимущество по золоту (${(goldAdvantage * 100).toStringAsFixed(1)}%)');
+    } else if (goldAdvantage < -0.1) {
+      reasons.add('Dire имеет значительное преимущество по золоту (${(-goldAdvantage * 100).toStringAsFixed(1)}%)');
     }
     
-    final reason = reasons.isEmpty 
-        ? 'Недостаточно данных для анализа' 
+    if (killAdvantage > 0.15) {
+      reasons.add('Radiant лидирует по убийствам');
+    } else if (killAdvantage < -0.15) {
+      reasons.add('Dire лидирует по убийствам');
+    }
+    
+    if (levelAdvantage > 2) {
+      reasons.add('Radiant имеет преимущество по уровням');
+    } else if (levelAdvantage < -2) {
+      reasons.add('Dire имеет преимущество по уровням');
+    }
+    
+    if (scoreAdvantage > 5) {
+      reasons.add('Radiant ведет по счету');
+    } else if (scoreAdvantage < -5) {
+      reasons.add('Dire ведет по счету');
+    }
+    
+    reasoning = reasons.isEmpty 
+        ? 'Ситуация на карте примерно равная'
         : reasons.join('. ');
     
+    // Рекомендуемая сумма ставки (процент от банкролла)
+    // Используем Kelly Criterion для расчета оптимальной ставки
+    final isRadiantWin = radiantWinProbability > 0.5;
+    final selectedOdds = isRadiantWin ? (odds.radiantOdds ?? 2.0) : (odds.direOdds ?? 2.0);
+    
+    final kellyFraction = _calculateKellyFraction(
+      winProbability: isRadiantWin ? radiantWinProbability : (1.0 - radiantWinProbability),
+      odds: selectedOdds,
+    );
+    
+    // Ограничиваем максимальную ставку 10% от банкролла
+    recommendedBetAmount = (kellyFraction * 100).clamp(0.0, 10.0);
+    
     return BettingDecision(
-      matchId: match.matchId,
-      recommendedTeam: recommendedTeam,
+      matchId: liveData.matchId,
+      recommendedTeam: isRadiantWin ? 'radiant' : 'dire',
+      winProbability: isRadiantWin ? radiantWinProbability : (1.0 - radiantWinProbability),
       confidence: confidence,
-      recommendedAmount: recommendedAmount,
-      reason: reason,
+      recommendedBetAmount: recommendedBetAmount,
+      reasoning: reasoning,
+      odds: selectedOdds,
       analysis: analysis,
     );
   }
   
-  /// Анализ паттернов для принятия решения
-  /// Учитывает исторические данные и текущее состояние
-  BettingDecision analyzeWithPatterns(
-    LiveMatchData liveData,
-    Odds? odds,
-    Match match,
-    List<LiveMatchData> history, // История изменений
-  ) {
-    // Базовый анализ
-    var decision = analyzeAndDecide(liveData, odds, match);
+  /// Расчет доли Kelly Criterion для оптимальной ставки
+  double _calculateKellyFraction({
+    required double winProbability,
+    required double odds,
+  }) {
+    // Kelly Criterion: f = (bp - q) / b
+    // где b = odds - 1, p = вероятность выигрыша, q = 1 - p
+    final b = odds - 1.0;
+    final p = winProbability;
+    final q = 1.0 - p;
     
-    // Анализ трендов (если есть история)
-    if (history.isNotEmpty && history.length >= 2) {
-      final trend = _analyzeTrend(history);
-      decision.analysis['trend'] = trend;
-      
-      // Если команда набирает преимущество, увеличиваем уверенность
-      if (trend['radiantMomentum'] == true && decision.recommendedTeam == 'radiant') {
-        decision = BettingDecision(
-          matchId: decision.matchId,
-          recommendedTeam: decision.recommendedTeam,
-          confidence: (decision.confidence * 1.1).clamp(0.0, 1.0),
-          recommendedAmount: decision.recommendedAmount * 1.1,
-          reason: '${decision.reason}. Radiant набирает преимущество.',
-          analysis: decision.analysis,
-        );
-      } else if (trend['direMomentum'] == true && decision.recommendedTeam == 'dire') {
-        decision = BettingDecision(
-          matchId: decision.matchId,
-          recommendedTeam: decision.recommendedTeam,
-          confidence: (decision.confidence * 1.1).clamp(0.0, 1.0),
-          recommendedAmount: decision.recommendedAmount * 1.1,
-          reason: '${decision.reason}. Dire набирает преимущество.',
-          analysis: decision.analysis,
-        );
-      }
-    }
+    if (b <= 0) return 0.0;
     
-    return decision;
-  }
-  
-  /// Анализ тренда на основе истории изменений
-  Map<String, dynamic> _analyzeTrend(List<LiveMatchData> history) {
-    if (history.length < 2) {
-      return {};
-    }
+    final kelly = (b * p - q) / b;
     
-    final first = history.first;
-    final last = history.last;
-    
-    bool radiantMomentum = false;
-    bool direMomentum = false;
-    
-    // Анализ изменения золота
-    if (first.radiantNetWorth != null && last.radiantNetWorth != null &&
-        first.direNetWorth != null && last.direNetWorth != null) {
-      final radiantChange = last.radiantNetWorth! - first.radiantNetWorth!;
-      final direChange = last.direNetWorth! - first.direNetWorth!;
-      
-      if (radiantChange > direChange + 2000) {
-        radiantMomentum = true;
-      } else if (direChange > radiantChange + 2000) {
-        direMomentum = true;
-      }
-    }
-    
-    // Анализ изменения убийств
-    if (first.radiantKills != null && last.radiantKills != null &&
-        first.direKills != null && last.direKills != null) {
-      final radiantKillChange = last.radiantKills! - first.radiantKills!;
-      final direKillChange = last.direKills! - first.direKills!;
-      
-      if (radiantKillChange > direKillChange + 2) {
-        radiantMomentum = true;
-      } else if (direKillChange > radiantKillChange + 2) {
-        direMomentum = true;
-      }
-    }
-    
-    return {
-      'radiantMomentum': radiantMomentum,
-      'direMomentum': direMomentum,
-    };
+    // Возвращаем только положительные значения (не ставим на проигрыш)
+    return kelly.clamp(0.0, 1.0);
   }
 }

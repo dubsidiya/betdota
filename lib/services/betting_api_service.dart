@@ -14,7 +14,7 @@ class BettingApiService {
   /// ВАЖНО: Это требует реальной интеграции с букмекерским API
   Future<bool> placeBet({
     required int matchId,
-    required BetType betType,
+    required String betType, // 'radiant' или 'dire'
     required double amount,
     required Odds odds,
     String? bookmaker,
@@ -23,7 +23,7 @@ class BettingApiService {
     debugPrint('Match ID: $matchId');
     debugPrint('Bet Type: $betType');
     debugPrint('Amount: $amount');
-    debugPrint('Odds: ${betType == BetType.radiantWin ? odds.radiantOdds : odds.direOdds}');
+    debugPrint('Odds: ${betType == 'radiant' ? odds.radiantOdds : odds.direOdds}');
     
     // ВАЖНО: Здесь должна быть реальная интеграция с API букмекера
     // Пример структуры запроса:

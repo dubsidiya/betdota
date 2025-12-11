@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/match.dart';
 import '../models/betting_decision.dart';
 import '../models/odds.dart';
+import '../models/live_match_data.dart';
 import 'realtime_tracking_service.dart';
 import 'betting_decision_service.dart';
 import 'dota_api_service.dart';
@@ -43,11 +44,15 @@ class RealtimeBettingService {
           final odds = await _apiService.getMatchOdds(match.matchId);
           
           // Анализируем и принимаем решение
-          final decision = _decisionService.analyzeWithPatterns(
-            liveData,
-            odds,
-            match,
-            history,
+          if (odds == null) {
+            debugPrint('RealtimeBettingService: Коэффициенты не получены');
+            return;
+          }
+          
+          final decision = _decisionService.analyzeAndDecide(
+            liveData: liveData,
+            odds: odds,
+            match: match,
           );
           
           // Сохраняем решение
