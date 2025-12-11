@@ -1,269 +1,253 @@
+import 'package:flutter/foundation.dart';
+import '../models/match.dart';
 import '../models/live_match_data.dart';
 import '../models/odds.dart';
-import '../models/match.dart';
+import '../models/betting_decision.dart';
 
-/// Тип ставки
-enum BetType {
-  radiantWin,      // Победа Radiant
-  direWin,         // Победа Dire
-  radiantKills,    // Больше убийств у Radiant
-  direKills,       // Больше убийств у Dire
-  totalKills,      // Общее количество убийств
-  matchDuration,   // Длительность матча
-}
-
-/// Решение о ставке
-class BettingDecision {
-  final BetType betType;
-  final double confidence; // Уверенность от 0.0 до 1.0
-  final double recommendedAmount; // Рекомендуемая сумма ставки
-  final String reasoning; // Обоснование решения
-  final Map<String, dynamic> analysisData; // Данные анализа
-  
-  BettingDecision({
-    required this.betType,
-    required this.confidence,
-    required this.recommendedAmount,
-    required this.reasoning,
-    required this.analysisData,
-  });
-}
-
-/// Сервис для принятия решений о ставках на основе анализа паттернов
+/// Сервис для принятия решений о ставках на основе анализа матча в реальном времени
 class BettingDecisionService {
-  double _currentBankroll = 10000.0;
   
-  /// Установить текущий банкролл
-  void setBankroll(double amount) {
-    _currentBankroll = amount;
-  }
-  
-  /// Получить текущий банкролл
-  double get bankroll => _currentBankroll;
-  
-  /// Анализ матча и принятие решения о ставке
-  /// Возвращает решение с рекомендацией типа ставки, суммы и уверенности
+  /// Анализировать текущее состояние матча и принять решение о ставке
   BettingDecision analyzeAndDecide(
     LiveMatchData liveData,
     Odds? odds,
+    Match match, {
+    double baseAmount = 100.0, // Базовая сумма ставки
+  }) {
+    final analysis = <String, dynamic>{};
+    double radiantAdvantage = 0.0;
+    double direAdvantage = 0.0;
+    final reasons = <String>[];
+    
+    // Фактор 1: Разница в золоте (Net Worth)
+    if (liveData.radiantNetWorth != null && liveData.direNetWorth != null) {
+      final netWorthDiff = liveData.radiantNetWorth! - liveData.direNetWorth!;
+      final netWorthPercent = netWorthDiff.abs() / ((liveData.radiantNetWorth! + liveData.direNetWorth!) / 2);
+      
+      analysis['netWorthDiff'] = netWorthDiff;
+      analysis['netWorthPercent'] = netWorthPercent;
+      
+      if (netWorthDiff > 5000) {
+        radiantAdvantage += 0.15;
+        reasons.add('Radiant имеет преимущество в золоте: ${netWorthDiff.toStringAsFixed(0)}');
+      } else if (netWorthDiff < -5000) {
+        direAdvantage += 0.15;
+        reasons.add('Dire имеет преимущество в золоте: ${netWorthDiff.abs().toStringAsFixed(0)}');
+      }
+    }
+    
+    // Фактор 2: Разница в убийствах
+    if (liveData.radiantKills != null && liveData.direKills != null) {
+      final killDiff = liveData.radiantKills! - liveData.direKills!;
+      analysis['killDiff'] = killDiff;
+      
+      if (killDiff > 5) {
+        radiantAdvantage += 0.12;
+        reasons.add('Radiant лидирует по убийствам: +$killDiff');
+      } else if (killDiff < -5) {
+        direAdvantage += 0.12;
+        reasons.add('Dire лидирует по убийствам: +${killDiff.abs()}');
+      }
+    }
+    
+    // Фактор 3: Разница в счете (уничтоженные строения)
+    if (liveData.radiantScore != null && liveData.direScore != null) {
+      final scoreDiff = liveData.radiantScore! - liveData.direScore!;
+      analysis['scoreDiff'] = scoreDiff;
+      
+      if (scoreDiff > 3) {
+        radiantAdvantage += 0.10;
+        reasons.add('Radiant уничтожил больше строений: +$scoreDiff');
+      } else if (scoreDiff < -3) {
+        direAdvantage += 0.10;
+        reasons.add('Dire уничтожил больше строений: +${scoreDiff.abs()}');
+      }
+    }
+    
+    // Фактор 4: Время матча (ранняя/поздняя игра)
+    if (liveData.duration != null) {
+      analysis['duration'] = liveData.duration;
+      
+      // В ранней игре (0-20 мин) преимущество менее значимо
+      // В поздней игре (30+ мин) преимущество более критично
+      if (liveData.duration! < 1200) { // До 20 минут
+        radiantAdvantage *= 0.7;
+        direAdvantage *= 0.7;
+        reasons.add('Ранняя игра - преимущество может измениться');
+      } else if (liveData.duration! > 1800) { // После 30 минут
+        radiantAdvantage *= 1.2;
+        direAdvantage *= 1.2;
+        reasons.add('Поздняя игра - преимущество критично');
+      }
+    }
+    
+    // Фактор 5: Анализ игроков (если доступны)
+    if (liveData.players != null && liveData.players!.isNotEmpty) {
+      final radiantPlayers = liveData.players!.where((p) => p.teamNumber == 0).toList();
+      final direPlayers = liveData.players!.where((p) => p.teamNumber == 1).toList();
+      
+      // Средний уровень команды
+      final radiantAvgLevel = radiantPlayers
+          .where((p) => p.level != null)
+          .map((p) => p.level!)
+          .fold(0, (a, b) => a + b) / radiantPlayers.length;
+      final direAvgLevel = direPlayers
+          .where((p) => p.level != null)
+          .map((p) => p.level!)
+          .fold(0, (a, b) => a + b) / direPlayers.length;
+      
+      if (radiantAvgLevel > direAvgLevel + 2) {
+        radiantAdvantage += 0.08;
+        reasons.add('Radiant имеет преимущество в уровнях');
+      } else if (direAvgLevel > radiantAvgLevel + 2) {
+        direAdvantage += 0.08;
+        reasons.add('Dire имеет преимущество в уровнях');
+      }
+      
+      analysis['radiantAvgLevel'] = radiantAvgLevel;
+      analysis['direAvgLevel'] = direAvgLevel;
+    }
+    
+    // Фактор 6: Коэффициенты букмекеров
+    if (odds != null) {
+      analysis['odds'] = {
+        'radiant': odds.radiantOdds,
+        'dire': odds.direOdds,
+      };
+      
+      // Если коэффициенты сильно отличаются от текущего состояния, это может быть value bet
+      final expectedRadiantWin = 1.0 / odds.radiantOdds;
+      final expectedDireWin = 1.0 / odds.direOdds;
+      
+      if (radiantAdvantage > direAdvantage && expectedRadiantWin < 0.5) {
+        radiantAdvantage += 0.05;
+        reasons.add('Value bet на Radiant (коэффициент выгодный)');
+      } else if (direAdvantage > radiantAdvantage && expectedDireWin < 0.5) {
+        direAdvantage += 0.05;
+        reasons.add('Value bet на Dire (коэффициент выгодный)');
+      }
+    }
+    
+    // Определяем победителя и уверенность
+    String recommendedTeam;
+    double confidence;
+    
+    if (radiantAdvantage > direAdvantage) {
+      recommendedTeam = 'radiant';
+      confidence = (0.5 + radiantAdvantage).clamp(0.0, 1.0);
+    } else if (direAdvantage > radiantAdvantage) {
+      recommendedTeam = 'dire';
+      confidence = (0.5 + direAdvantage).clamp(0.0, 1.0);
+    } else {
+      // Ничья - не рекомендуем ставку
+      recommendedTeam = 'none';
+      confidence = 0.5;
+    }
+    
+    // Рассчитываем рекомендуемую сумму ставки на основе уверенности
+    double recommendedAmount = 0.0;
+    if (confidence >= 0.6) {
+      // Чем выше уверенность, тем больше сумма (но с ограничением)
+      recommendedAmount = baseAmount * (confidence - 0.5) * 2;
+      recommendedAmount = recommendedAmount.clamp(baseAmount * 0.1, baseAmount * 2.0);
+    }
+    
+    final reason = reasons.isEmpty 
+        ? 'Недостаточно данных для анализа' 
+        : reasons.join('. ');
+    
+    return BettingDecision(
+      matchId: match.matchId,
+      recommendedTeam: recommendedTeam,
+      confidence: confidence,
+      recommendedAmount: recommendedAmount,
+      reason: reason,
+      analysis: analysis,
+    );
+  }
+  
+  /// Анализ паттернов для принятия решения
+  /// Учитывает исторические данные и текущее состояние
+  BettingDecision analyzeWithPatterns(
+    LiveMatchData liveData,
+    Odds? odds,
     Match match,
+    List<LiveMatchData> history, // История изменений
   ) {
-    final analysis = _analyzeMatchState(liveData, odds, match);
-    final decision = _makeDecision(analysis, liveData, odds);
+    // Базовый анализ
+    var decision = analyzeAndDecide(liveData, odds, match);
+    
+    // Анализ трендов (если есть история)
+    if (history.isNotEmpty && history.length >= 2) {
+      final trend = _analyzeTrend(history);
+      decision.analysis['trend'] = trend;
+      
+      // Если команда набирает преимущество, увеличиваем уверенность
+      if (trend['radiantMomentum'] == true && decision.recommendedTeam == 'radiant') {
+        decision = BettingDecision(
+          matchId: decision.matchId,
+          recommendedTeam: decision.recommendedTeam,
+          confidence: (decision.confidence * 1.1).clamp(0.0, 1.0),
+          recommendedAmount: decision.recommendedAmount * 1.1,
+          reason: '${decision.reason}. Radiant набирает преимущество.',
+          analysis: decision.analysis,
+        );
+      } else if (trend['direMomentum'] == true && decision.recommendedTeam == 'dire') {
+        decision = BettingDecision(
+          matchId: decision.matchId,
+          recommendedTeam: decision.recommendedTeam,
+          confidence: (decision.confidence * 1.1).clamp(0.0, 1.0),
+          recommendedAmount: decision.recommendedAmount * 1.1,
+          reason: '${decision.reason}. Dire набирает преимущество.',
+          analysis: decision.analysis,
+        );
+      }
+    }
     
     return decision;
   }
   
-  /// Анализ текущего состояния матча
-  Map<String, dynamic> _analyzeMatchState(
-    LiveMatchData liveData,
-    Odds? odds,
-    Match match,
-  ) {
-    final analysis = <String, dynamic>{};
-    
-    // 1. Анализ преимущества по золоту
-    final radiantNetWorth = liveData.radiantNetWorth ?? 0;
-    final direNetWorth = liveData.direNetWorth ?? 0;
-    final totalNetWorth = radiantNetWorth + direNetWorth;
-    
-    if (totalNetWorth > 0) {
-      final radiantGoldAdvantage = (radiantNetWorth / totalNetWorth) - 0.5;
-      analysis['radiantGoldAdvantage'] = radiantGoldAdvantage;
-      analysis['goldAdvantagePercent'] = (radiantGoldAdvantage * 100).abs();
+  /// Анализ тренда на основе истории изменений
+  Map<String, dynamic> _analyzeTrend(List<LiveMatchData> history) {
+    if (history.length < 2) {
+      return {};
     }
     
-    // 2. Анализ преимущества по убийствам
-    final radiantKills = liveData.radiantKills ?? 0;
-    final direKills = liveData.direKills ?? 0;
-    final totalKills = radiantKills + direKills;
+    final first = history.first;
+    final last = history.last;
     
-    if (totalKills > 0) {
-      final radiantKillAdvantage = (radiantKills / totalKills) - 0.5;
-      analysis['radiantKillAdvantage'] = radiantKillAdvantage;
-      analysis['killAdvantagePercent'] = (radiantKillAdvantage * 100).abs();
-    }
+    bool radiantMomentum = false;
+    bool direMomentum = false;
     
-    // 3. Анализ опыта команд
-    double radiantXp = 0.0;
-    double direXp = 0.0;
-    
-    if (liveData.players != null) {
-      for (var player in liveData.players!) {
-        final xp = (player.xpm ?? 0) * ((liveData.duration ?? 0) / 60.0);
-        if (player.teamNumber == 0) {
-          radiantXp += xp;
-        } else if (player.teamNumber == 1) {
-          direXp += xp;
-        }
+    // Анализ изменения золота
+    if (first.radiantNetWorth != null && last.radiantNetWorth != null &&
+        first.direNetWorth != null && last.direNetWorth != null) {
+      final radiantChange = last.radiantNetWorth! - first.radiantNetWorth!;
+      final direChange = last.direNetWorth! - first.direNetWorth!;
+      
+      if (radiantChange > direChange + 2000) {
+        radiantMomentum = true;
+      } else if (direChange > radiantChange + 2000) {
+        direMomentum = true;
       }
     }
     
-    final totalXp = radiantXp + direXp;
-    if (totalXp > 0) {
-      final radiantXpAdvantage = (radiantXp / totalXp) - 0.5;
-      analysis['radiantXpAdvantage'] = radiantXpAdvantage;
-    }
-    
-    // 4. Анализ длительности матча
-    final duration = liveData.duration ?? 0;
-    analysis['duration'] = duration;
-    analysis['isEarlyGame'] = duration < 1200; // Меньше 20 минут
-    analysis['isMidGame'] = duration >= 1200 && duration < 2400; // 20-40 минут
-    analysis['isLateGame'] = duration >= 2400; // Больше 40 минут
-    
-    // 5. Анализ паттернов по времени
-    // В ранней игре преимущество по золоту менее значимо
-    // В поздней игре преимущество по золоту критично
-    double timeWeight = 1.0;
-    if (duration < 600) {
-      timeWeight = 0.5; // Ранняя игра - меньше веса
-    } else if (duration > 2400) {
-      timeWeight = 1.5; // Поздняя игра - больше веса
-    }
-    analysis['timeWeight'] = timeWeight;
-    
-    // 6. Анализ коэффициентов
-    if (odds != null) {
-      final radiantOddsValue = odds.radiantOdds ?? 2.0;
-      final direOddsValue = odds.direOdds ?? 2.0;
-      final radiantImpliedProb = 1.0 / radiantOddsValue;
-      final direImpliedProb = 1.0 / direOddsValue;
-      analysis['radiantImpliedProb'] = radiantImpliedProb;
-      analysis['direImpliedProb'] = direImpliedProb;
-      analysis['valueBet'] = _calculateValueBet(radiantImpliedProb, direImpliedProb, analysis, odds);
-    }
-    
-    // 7. Комплексный анализ преимущества
-    double radiantAdvantage = 0.0;
-    
-    if (analysis['radiantGoldAdvantage'] != null) {
-      radiantAdvantage += analysis['radiantGoldAdvantage'] * timeWeight * 0.4;
-    }
-    if (analysis['radiantKillAdvantage'] != null) {
-      radiantAdvantage += analysis['radiantKillAdvantage'] * 0.3;
-    }
-    if (analysis['radiantXpAdvantage'] != null) {
-      radiantAdvantage += analysis['radiantXpAdvantage'] * 0.3;
-    }
-    
-    analysis['radiantAdvantage'] = radiantAdvantage;
-    analysis['direAdvantage'] = -radiantAdvantage;
-    
-    return analysis;
-  }
-  
-  /// Расчет value bet (ставка с положительным математическим ожиданием)
-  Map<String, dynamic>? _calculateValueBet(
-    double radiantImpliedProb,
-    double direImpliedProb,
-    Map<String, dynamic> analysis,
-    Odds odds,
-  ) {
-    final radiantRealProb = 0.5 + (analysis['radiantAdvantage'] ?? 0.0);
-    final direRealProb = 1.0 - radiantRealProb;
-    
-    final radiantValue = radiantRealProb * radiantImpliedProb - 1.0;
-    final direValue = direRealProb * direImpliedProb - 1.0;
-    
-    if (radiantValue > 0.1 || direValue > 0.1) {
-      return {
-        'type': radiantValue > direValue ? BetType.radiantWin : BetType.direWin,
-        'value': radiantValue > direValue ? radiantValue : direValue,
-        'realProb': radiantValue > direValue ? radiantRealProb : direRealProb,
-        'impliedProb': radiantValue > direValue ? radiantImpliedProb : direImpliedProb,
-      };
-    }
-    
-    return null;
-  }
-  
-  /// Принятие решения на основе анализа
-  BettingDecision _makeDecision(
-    Map<String, dynamic> analysis,
-    LiveMatchData liveData,
-    Odds? odds,
-  ) {
-    final radiantAdvantage = analysis['radiantAdvantage'] ?? 0.0;
-    final confidence = (radiantAdvantage.abs() * 2).clamp(0.0, 1.0);
-    
-    BetType betType;
-    String reasoning;
-    
-    // Определяем тип ставки на основе анализа
-    final goldAdvantagePercent = (analysis['goldAdvantagePercent'] as num?)?.toDouble() ?? 0.0;
-    final killAdvantagePercent = (analysis['killAdvantagePercent'] as num?)?.toDouble() ?? 0.0;
-    
-    if (radiantAdvantage > 0.15) {
-      betType = BetType.radiantWin;
-      reasoning = 'Radiant имеет значительное преимущество по золоту (${goldAdvantagePercent.toStringAsFixed(1)}%) '
-          'и убийствам (${killAdvantagePercent.toStringAsFixed(1)}%). '
-          'Вероятность победы Radiant: ${((0.5 + radiantAdvantage) * 100).toStringAsFixed(1)}%';
-    } else if (radiantAdvantage < -0.15) {
-      betType = BetType.direWin;
-      reasoning = 'Dire имеет значительное преимущество по золоту (${goldAdvantagePercent.toStringAsFixed(1)}%) '
-          'и убийствам (${killAdvantagePercent.toStringAsFixed(1)}%). '
-          'Вероятность победы Dire: ${((0.5 - radiantAdvantage) * 100).toStringAsFixed(1)}%';
-    } else {
-      // Если преимущество небольшое, анализируем другие факторы
-      final duration = liveData.duration ?? 0;
-      if (duration < 600 && (analysis['radiantKillAdvantage'] ?? 0).abs() > 0.2) {
-        // Ранняя игра, большое преимущество по убийствам
-        betType = analysis['radiantKillAdvantage'] > 0 ? BetType.radiantKills : BetType.direKills;
-        reasoning = 'Ранняя игра (${(duration / 60).toStringAsFixed(0)} мин). '
-            'Преимущество по убийствам может быть временным, но значимым.';
-      } else {
-        // Неопределенная ситуация - не рекомендуем ставку
-        betType = BetType.radiantWin; // По умолчанию
-        reasoning = 'Текущее состояние матча не дает четкого преимущества ни одной команде. '
-            'Рекомендуется подождать более явных сигналов.';
+    // Анализ изменения убийств
+    if (first.radiantKills != null && last.radiantKills != null &&
+        first.direKills != null && last.direKills != null) {
+      final radiantKillChange = last.radiantKills! - first.radiantKills!;
+      final direKillChange = last.direKills! - first.direKills!;
+      
+      if (radiantKillChange > direKillChange + 2) {
+        radiantMomentum = true;
+      } else if (direKillChange > radiantKillChange + 2) {
+        direMomentum = true;
       }
     }
     
-    // Рассчитываем рекомендуемую сумму ставки на основе уверенности и банкролла
-    // Используем Kelly Criterion для оптимального размера ставки
-    double recommendedAmount = 0.0;
-    
-    if (odds != null && confidence > 0.5) {
-      final winProb = betType == BetType.radiantWin 
-          ? (0.5 + radiantAdvantage).clamp(0.0, 1.0)
-          : (0.5 - radiantAdvantage).clamp(0.0, 1.0);
-      
-      final oddsValue = betType == BetType.radiantWin 
-          ? (odds.radiantOdds ?? 2.0)
-          : (odds.direOdds ?? 2.0);
-      
-      // Kelly Criterion: f = (p * b - q) / b
-      // где p = вероятность выигрыша, q = вероятность проигрыша, b = коэффициенты - 1
-      final kellyFraction = (winProb * (oddsValue - 1) - (1 - winProb)) / (oddsValue - 1);
-      
-      // Используем половину Kelly для консервативности
-      final conservativeFraction = (kellyFraction * 0.5).clamp(0.0, 0.1); // Максимум 10% банкролла
-      
-      recommendedAmount = _currentBankroll * conservativeFraction * confidence;
-      
-      // Минимальная ставка 100, максимальная 10% от банкролла
-      recommendedAmount = recommendedAmount.clamp(100.0, _currentBankroll * 0.1);
-    } else {
-      reasoning = 'Недостаточно данных или низкая уверенность для рекомендации ставки.';
-    }
-    
-    return BettingDecision(
-      betType: betType,
-      confidence: confidence,
-      recommendedAmount: recommendedAmount,
-      reasoning: reasoning,
-      analysisData: analysis,
-    );
-  }
-  
-  /// Обновить банкролл после ставки
-  void updateBankrollAfterBet(double betAmount, bool won, double odds) {
-    if (won) {
-      _currentBankroll += betAmount * (odds - 1);
-    } else {
-      _currentBankroll -= betAmount;
-    }
+    return {
+      'radiantMomentum': radiantMomentum,
+      'direMomentum': direMomentum,
+    };
   }
 }
-

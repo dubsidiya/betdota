@@ -1,31 +1,31 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/match.dart';
-import '../models/live_match_data.dart';
+import '../models/betting_decision.dart';
 import '../models/odds.dart';
-import 'live_tracking_service.dart';
+import 'realtime_tracking_service.dart';
 import 'betting_decision_service.dart';
-import 'betting_api_service.dart';
 import 'dota_api_service.dart';
 
-/// Основной сервис для автоматического анализа и ставок в реальном времени
+/// Сервис для реального времени ставок
+/// Отслеживает матчи и принимает решения о ставках на основе анализа
 class RealtimeBettingService {
-  final LiveTrackingService _trackingService = LiveTrackingService();
+  final RealtimeTrackingService _trackingService = RealtimeTrackingService();
   final BettingDecisionService _decisionService = BettingDecisionService();
-  final BettingApiService _bettingApi = BettingApiService();
   final DotaApiService _apiService = DotaApiService();
-  
   final Map<int, StreamSubscription> _subscriptions = {};
+  final Map<int, List<BettingDecision>> _decisionHistory = {};
   final Map<int, BettingDecision?> _lastDecisions = {};
   
-  /// Начать автоматическое отслеживание и анализ матча
-  /// Принимает решения о ставках на основе анализа паттернов
-  Stream<BettingDecision> startAutoBetting(
+  /// Начать отслеживание матча и получение решений о ставках
+  Stream<BettingDecision> trackAndDecide(
     Match match, {
     double minConfidence = 0.6,
+    double baseAmount = 100.0,
     bool autoPlaceBets = false,
   }) {
     final controller = StreamController<BettingDecision>.broadcast();
+    final history = <LiveMatchData>[];
     
     debugPrint('RealtimeBettingService: Начато отслеживание матча ${match.matchId}');
     
@@ -33,22 +33,43 @@ class RealtimeBettingService {
     final subscription = _trackingService.trackMatch(match.matchId).listen(
       (liveData) async {
         try {
+          // Сохраняем историю (последние 10 обновлений)
+          history.add(liveData);
+          if (history.length > 10) {
+            history.removeAt(0);
+          }
+          
           // Получаем актуальные коэффициенты
           final odds = await _apiService.getMatchOdds(match.matchId);
           
           // Анализируем и принимаем решение
-          final decision = _decisionService.analyzeAndDecide(
+          final decision = _decisionService.analyzeWithPatterns(
             liveData,
             odds,
             match,
+            history,
           );
           
-          // Сохраняем последнее решение
+          // Сохраняем решение
           _lastDecisions[match.matchId] = decision;
+          if (!_decisionHistory.containsKey(match.matchId)) {
+            _decisionHistory[match.matchId] = [];
+          }
+          _decisionHistory[match.matchId]!.add(decision);
+          
+          // Ограничиваем историю решений
+          if (_decisionHistory[match.matchId]!.length > 50) {
+            _decisionHistory[match.matchId]!.removeAt(0);
+          }
           
           // Если уверенность достаточна, отправляем решение
           if (decision.confidence >= minConfidence) {
             controller.add(decision);
+            
+            debugPrint('RealtimeBettingService: Решение для матча ${match.matchId}: '
+                '${decision.recommendedTeam.toUpperCase()}, '
+                'уверенность: ${decision.confidencePercent}, '
+                'сумма: ${decision.recommendedAmount.toStringAsFixed(0)}');
             
             // Если включена автоматическая ставка и уверенность высокая
             if (autoPlaceBets && decision.confidence >= 0.75 && odds != null) {
@@ -76,21 +97,16 @@ class RealtimeBettingService {
     Odds odds,
   ) async {
     try {
-      final success = await _bettingApi.placeBet(
-        matchId: match.matchId,
-        betType: decision.betType,
-        amount: decision.recommendedAmount,
-        odds: odds,
-      );
+      // Здесь должна быть интеграция с API букмекеров
+      // Пока что только логируем
+      debugPrint('RealtimeBettingService: Автоматическая ставка размещена: '
+          'Матч ${match.matchId}, '
+          'Команда: ${decision.recommendedTeam}, '
+          'Сумма: ${decision.recommendedAmount.toStringAsFixed(0)}, '
+          'Коэффициент: ${decision.recommendedTeam == "radiant" ? odds.radiantOdds : odds.direOdds}');
       
-      if (success) {
-        debugPrint('RealtimeBettingService: Ставка успешно размещена');
-        debugPrint('  Тип: ${decision.betType}');
-        debugPrint('  Сумма: ${decision.recommendedAmount.toStringAsFixed(2)}');
-        debugPrint('  Уверенность: ${(decision.confidence * 100).toStringAsFixed(1)}%');
-      } else {
-        debugPrint('RealtimeBettingService: Не удалось разместить ставку');
-      }
+      // TODO: Интеграция с реальным API букмекеров
+      // await bettingApi.placeBet(...);
     } catch (e) {
       debugPrint('RealtimeBettingService: Ошибка размещения ставки: $e');
     }
@@ -101,6 +117,7 @@ class RealtimeBettingService {
     _subscriptions[matchId]?.cancel();
     _subscriptions.remove(matchId);
     _trackingService.stopTracking(matchId);
+    _decisionHistory.remove(matchId);
     _lastDecisions.remove(matchId);
   }
   
@@ -109,19 +126,15 @@ class RealtimeBettingService {
     return _lastDecisions[matchId];
   }
   
-  /// Установить банкролл
-  void setBankroll(double amount) {
-    _decisionService.setBankroll(amount);
+  /// Получить историю решений для матча
+  List<BettingDecision> getDecisionHistory(int matchId) {
+    return _decisionHistory[matchId] ?? [];
   }
   
-  /// Получить текущий банкролл
-  double get bankroll => _decisionService.bankroll;
-  
-  void dispose() {
+  /// Остановить все отслеживания
+  void stopAll() {
     for (var matchId in _subscriptions.keys.toList()) {
       stopTracking(matchId);
     }
-    _trackingService.dispose();
   }
 }
-
